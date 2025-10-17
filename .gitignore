@@ -1,0 +1,8 @@
+/raw_datasets/*
+/secrets/*
+
+.venv
+.env
+
+inventory.yml
+swarm_info.yml

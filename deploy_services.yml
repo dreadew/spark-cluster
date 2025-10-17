@@ -1,0 +1,103 @@
+---
+- name: Подготовка образов и деплой стека в Swarm
+  hosts: managers
+  become: true
+  vars:
+    project_dir: /opt/spark-cluster
+  tasks:
+    - name: Создать директорию проекта
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+
+    - name: Копировать docker-compose файл
+      copy:
+        src: ./compose.yaml
+        dest: "{{ project_dir }}/compose.yaml"
+
+    - name: Копировать .env файл
+      copy:
+        src: ./.env
+        dest: "{{ project_dir }}/.env"
+    
+    - name: Копировать Makefile
+      copy:
+        src: ./Makefile
+        dest: "{{ project_dir }}/Makefile"
+    
+    - name: Копировать raw_datasets директорию
+      copy:
+        src: ./raw_datasets
+        dest: "{{ project_dir }}/raw_datasets"
+        mode: '0755'
+    
+    - name: Копировать upload_raw_to_s3.sh файл
+      copy:
+        src: ./upload_raw_to_s3.sh
+        dest: "{{ project_dir }}/upload_raw_to_s3.sh"
+        mode: '0755'
+    
+    - name: Ротация секретов
+      shell: "make rotate-secrets"
+      args:
+        chdir: "{{ project_dir }}"
+    
+    - name: Создать папку secrets на локальной машине
+      become: false
+      delegate_to: localhost
+      file:
+        path: ./secrets
+        state: directory
+        mode: '0755'
+
+    - name: Сохранить новые секреты на локальной машине
+      fetch:
+        src: "{{ project_dir }}/.env"
+        dest: "./secrets/.env"
+        flat: yes
+
+
+- name: Деплой Docker Swarm стека и последующая обработка данных
+  hosts: managers
+  become: true
+  vars:
+    project_dir: /opt/spark-cluster
+  tasks:
+    - name: Найти имя первой worker-ноды
+      shell: >
+        docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }} {{ '{{' }}.Status{{ '}}' }} {{ '{{' }}.ManagerStatus{{ '}}' }}' | grep -v Leader | awk 'NR==1{print $1}'
+      register: worker_node_name
+      changed_when: false
+
+    - name: Получить IP worker-ноды
+      shell: >
+        docker node inspect -f '{{ '{{' }}.Status.Addr{{ '}}' }}' {{ worker_node_name.stdout }}
+      register: worker_ip
+      changed_when: false
+
+    - name: Обновить .env с IP worker-ноды
+      lineinfile:
+        path: "{{ project_dir }}/.env"
+        regexp: '^S3_EXTERNAL_HOST='
+        line: "S3_EXTERNAL_HOST={{ worker_ip.stdout }}"
+      when: worker_ip.stdout is defined and worker_ip.stdout != ""
+
+    - name: Деплой docker stack
+      command: make up
+      args:
+        chdir: "{{ project_dir }}"
+
+    - name: Подождать, пока сервисы подняты
+      wait_for:
+        path: /var/run/docker.sock
+        timeout: 30
+
+    - name: Запустить скрипт upload_raw_to_s3.sh
+      command: bash {{ project_dir }}/upload_raw_to_s3.sh
+      args:
+        chdir: "{{ project_dir }}"
+
+    - name: Удалить локальные raw_datasets
+      file:
+        path: "{{ project_dir }}/raw_datasets"
+        state: absent

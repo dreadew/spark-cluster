@@ -1,0 +1,125 @@
+---
+- name: Установка Docker на VPS (Debian/Fedora)
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Показать дистрибутив
+      debug:
+        msg: "Дистрибутив: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Установить Docker на Debian/Ubuntu
+      when: ansible_facts['os_family'] == "Debian"
+      block:
+        - name: Установить зависимости
+          apt:
+            name:
+              - apt-transport-https
+              - ca-certificates
+              - curl
+              - gnupg
+              - lsb-release
+              - make
+            state: present
+            update_cache: yes
+
+        - name: Добавить официальный GPG ключ Docker
+          ansible.builtin.shell: |
+            curl -fsSL https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+          args:
+            creates: /usr/share/keyrings/docker-archive-keyring.gpg
+
+        - name: Добавить репозиторий Docker
+          apt_repository:
+            repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_lsb.codename }} stable"
+            state: present
+
+        - name: Установить Docker Engine
+          apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+            state: latest
+            update_cache: yes
+
+        - name: Включить и запустить Docker
+          service:
+            name: docker
+            enabled: yes
+            state: started
+
+    - name: Установить Docker на Fedora
+      when: ansible_facts['os_family'] == "RedHat" and ansible_distribution == "Fedora"
+      block:
+        - name: Удалить возможные старые версии Docker
+          dnf:
+            name:
+              - docker
+              - docker-client
+              - docker-client-latest
+              - docker-common
+              - docker-latest
+              - docker-latest-logrotate
+              - docker-logrotate
+              - docker-engine
+            state: absent
+
+        - name: Установить dnf-plugins-core
+          dnf:
+            name: 
+              - dnf-plugins-core
+              - make
+            state: present
+
+        - name: Добавить репозиторий Docker
+          command: dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+          args:
+            creates: /etc/yum.repos.d/docker-ce.repo
+
+        - name: Установить Docker Engine
+          dnf:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+            state: latest
+
+        - name: Включить и запустить Docker
+          service:
+            name: docker
+            enabled: yes
+            state: started
+        
+    - name: Проверить, установлен ли AWS CLI v2
+      command: aws --version
+      register: aws_cli_check
+      ignore_errors: yes
+
+    - name: Установить AWS CLI v2, если не установлен
+      when: aws_cli_check.rc != 0 or "'aws-cli/2'" not in aws_cli_check.stdout
+      block:
+        - name: Скачать установщик AWS CLI v2
+          get_url:
+            url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+            dest: "/tmp/awscliv2.zip"
+            mode: '0644'
+
+        - name: Распаковать установщик AWS CLI v2
+          unarchive:
+            src: "/tmp/awscliv2.zip"
+            dest: "/tmp"
+            remote_src: yes
+
+        - name: Установить AWS CLI v2
+          command: /tmp/aws/install --update
+          args:
+            creates: /usr/local/bin/aws
+
+        - name: Проверить успешную установку AWS CLI v2
+          command: aws --version
+          register: aws_cli_version
+
+        - debug:
+            msg: "Установлен {{ aws_cli_version.stdout }}"

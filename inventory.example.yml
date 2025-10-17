@@ -1,0 +1,12 @@
+all:
+  children:
+    managers:
+      hosts:
+        master1:
+          ansible_host: vps-host
+          ansible_user: vps-user
+    workers:
+      hosts:
+        worker1:
+          ansible_host: vps-host
+          ansible_user: vps-user

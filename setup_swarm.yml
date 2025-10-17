@@ -1,0 +1,70 @@
+---
+- name: Настройка Docker Swarm кластера
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Убедиться, что Docker установлен
+      command: docker --version
+      register: docker_check
+      ignore_errors: yes
+
+    - name: Проверить, что Docker установлен
+      fail:
+        msg: "Docker не установлен на {{ inventory_hostname }}. Сначала запусти установку."
+      when: docker_check.rc != 0
+
+- name: Инициализация Docker Swarm на мастере
+  hosts: managers
+  become: true
+  tasks:
+    - name: Получить IP мастера
+      command: hostname -I
+      register: master_ip_raw
+
+    - set_fact:
+        master_ip: "{{ master_ip_raw.stdout.split()[0] }}"
+
+    - name: Инициализация swarm
+      command: docker swarm init --advertise-addr {{ master_ip }}
+      register: swarm_init
+      failed_when: swarm_init.rc not in [0,1]
+      changed_when: "'Swarm initialized' in swarm_init.stdout"
+
+    - name: Получить токен для воркеров
+      command: docker swarm join-token -q worker
+      register: worker_token
+
+    - name: Сохранить токен и IP для воркеров
+      set_fact:
+        swarm_join_token: "{{ worker_token.stdout }}"
+        swarm_master_ip: "{{ master_ip }}"
+
+    - name: Создать папку secrets на локальной машине
+      local_action:
+        module: file
+        path: ./secrets
+        state: directory
+        mode: '0755'
+
+    - name: Сохранить токен в файл для передачи воркерам
+      delegate_to: localhost
+      become: false
+      copy:
+        content: |
+          token: {{ worker_token.stdout }}
+          master_ip: {{ master_ip }}
+        dest: ./secrets/swarm_info.yml
+
+- name: Присоединение воркеров к Swarm
+  hosts: workers
+  become: true
+  vars_files:
+    - ./swarm_info.yml
+  tasks:
+    - name: Подключение воркера к swarm
+      command: docker swarm join --token {{ token }} {{ master_ip }}:2377
+      register: join_result
+      failed_when: join_result.rc not in [0,1]
+      changed_when: "'This node joined a swarm as a worker' in join_result.stdout"
