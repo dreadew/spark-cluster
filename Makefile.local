@@ -1,7 +1,0 @@
-.PHONY: up down
-
-up:
-	docker compose -f compose.local.yaml up -d --build
-
-down:
-	docker compose -f compose.local.yaml down -v

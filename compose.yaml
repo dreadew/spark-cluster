@@ -11,6 +11,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-datawarehouse}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-superset.sh:/docker-entrypoint-initdb.d/init-superset.sh:ro
+      - ./postgres/entrypoint.sh:/docker-entrypoint-initdb.d/entrypoint.sh:ro
+    entrypoint: ["/docker-entrypoint-initdb.d/entrypoint.sh"]
     ports:
       - "5432:5432"
     networks:
@@ -72,25 +75,27 @@ services:
         preferences:
           - spread: node.id
 
-  jupyter:
-    image: dreadew/jupyter-spark:main
-    ports:
-      - "8888:8888"
-    environment:
-      JUPYTER_TOKEN: ${JUPYTER_TOKEN}
-      SPARK_URL: ${SPARK_URL}
-      DB_CONNECTION_STRING: ${DB_CONNECTION_STRING}
-      S3_ENDPOINT: ${S3_PROTOCOL:-http}://${S3_HOST:-minio}:${S3_PORT:-9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_BUCKETS: ${S3_BUCKETS}
-    networks:
-      - spark-net
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == worker
+  # jupyter:
+  #   image: dreadew/jupyter-spark:main
+  #   ports:
+  #     - "8888:8888"
+  #   environment:
+  #     JUPYTER_TOKEN: ${JUPYTER_TOKEN}
+  #     SPARK_URL: ${SPARK_URL}
+  #     DB_CONNECTION_STRING: ${DB_CONNECTION_STRING}
+  #     S3_ENDPOINT: ${S3_PROTOCOL:-http}://${S3_HOST:-minio}:${S3_PORT:-9000}
+  #     S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  #     S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  #     S3_BUCKETS: ${S3_BUCKETS}
+  #   networks:
+  #     - spark-net
+  #   volumes:
+  #     - ./notebooks:/home/jovyan/notebooks
+  #   deploy:
+  #     replicas: 1
+  #     placement:
+  #       constraints:
+  #         - node.role == worker
 
   minio:
     image: minio/minio:latest
@@ -111,8 +116,115 @@ services:
         constraints:
           - node.role == worker
 
+  hive-metastore:
+    image: dreadew/hive-metastore:main
+    environment:
+      HIVE_METASTORE_DB_HOST: postgres
+      HIVE_METASTORE_DB_PORT: 5432
+      HIVE_METASTORE_DB_NAME: ${POSTGRES_DB:-postgres}
+      HIVE_METASTORE_DB_USER: ${POSTGRES_USER:-postgres}
+      HIVE_METASTORE_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ENDPOINT: ${S3_PROTOCOL:-http}://${S3_HOST:-minio}:${S3_PORT:-9000}
+    ports:
+      - "9083:9083"
+    volumes:
+      - hive-metastore-data:/opt/hive/metastore
+      - hive-logs:/opt/hive/logs
+      - hive-warehouse:/opt/hive/warehouse
+    networks:
+      - spark-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+  
+  trino:
+    image: trinodb/trino:477
+    entrypoint: ["/custom-entrypoint.sh"]
+    environment:
+      - TRINO_CORES=${TRINO_CORES:-2}
+      - TRINO_MEMORY=${TRINO_MEMORY:-4GB}
+      - AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY:-minioadmin}
+      - AWS_REGION=${S3_REGION:-us-east-1}
+      - HADOOP_CONF_DIR=/etc/hadoop/conf
+      # Variables for catalog templates
+      - S3_PROTOCOL=${S3_PROTOCOL:-http}
+      - S3_HOST=${S3_HOST:-minio}
+      - S3_PORT=${S3_PORT:-9000}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - HIVE_METASTORE_HOST=hive-metastore
+      - HIVE_METASTORE_PORT=9083
+      - DELTA_COMPRESSION_CODEC=${DELTA_COMPRESSION_CODEC:-ZSTD}
+    ports:
+      - "8088:8080"
+    networks:
+      - spark-net
+    volumes:
+      - trino_data:/data
+      - ./trino/entrypoint.sh:/custom-entrypoint.sh:ro
+      - ./trino/hive.properties.template:/etc/trino/catalog-templates/hive.properties.template:ro
+      - ./trino/delta.properties.template:/etc/trino/catalog-templates/delta.properties.template:ro
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+  
+  valkey:
+    image: valkey/valkey:9.0-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey_data:/data
+    networks:
+      - spark-network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+
+  superset:
+    image: dreadew/superset:main
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SUPERSET_DATABASE_URI=postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${SUPERSET_DB_NAME:-superset}
+      - SUPERSET_ADMIN_USERNAME=${SUPERSET_ADMIN_USERNAME}
+      - SUPERSET_ADMIN_PASSWORD=${SUPERSET_ADMIN_PASSWORD}
+      - SUPERSET_ADMIN_EMAIL=${SUPERSET_ADMIN_EMAIL}
+      # DB Configuration
+      - SUPERSET_DB_HOST=postgres
+      - SUPERSET_DB_PORT=5432
+      - SUPERSET_DB_NAME=${SUPERSET_DB_NAME:-superset}
+      - SUPERSET_DB_USER=${POSTGRES_USER:-postgres}
+      - SUPERSET_DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+    ports:
+      - "8089:8088"
+    volumes:
+      - superset_home:/app/superset_home
+    networks:
+      - spark-network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
 volumes:
   postgres_data:
   minio_data:
   spark_apps:
   spark_data:
+  hive-metastore-data:
+  hive-logs:
+  hive-warehouse:
+  trino_data:
+  valkey_data:
+  superset_home:

@@ -1,8 +1,8 @@
-/raw_datasets/*
-/secrets/*
+raw/*
+secrets/*
+sql/prod_*.sql
 
 .venv
 .env
 
-inventory.yml
-swarm_info.yml
+ansible/inventory.yml

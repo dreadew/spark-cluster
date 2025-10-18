@@ -13,8 +13,8 @@ if ! command -v aws &> /dev/null; then
   exit 1
 fi
 
-if [ ! -d "raw_datasets" ]; then
-  echo "Папка raw_datasets не найдена!"
+if [ ! -d "${S3_RAW_BUCKET}" ]; then
+  echo "Папка ${S3_RAW_BUCKET} не найдена!"
   exit 1
 fi
 
@@ -45,7 +45,8 @@ for BUCKET in "${BUCKETS[@]}"; do
   fi
 done
 
-echo "Загружаю файлы из raw_datasets в бакет raw-datasets..."
-aws --endpoint-url "$S3_URL" --profile local s3 cp raw_datasets "s3://raw-datasets/" --recursive
+echo "Загружаю файлы из ${S3_RAW_BUCKET}/ в бакет ${S3_RAW_BUCKET}..."
+# Use --size-only to skip files that already exist with same size (idempotent)
+aws --endpoint-url "$S3_URL" --profile local s3 sync ${S3_RAW_BUCKET}/ "s3://${S3_RAW_BUCKET}/" --size-only
 
 echo "Загрузка завершена успешно!"

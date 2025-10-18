@@ -25,16 +25,28 @@
         src: ./Makefile
         dest: "{{ project_dir }}/Makefile"
     
-    - name: Копировать raw_datasets директорию
+    - name: Копировать scripts директорию
       copy:
-        src: ./raw_datasets
-        dest: "{{ project_dir }}/raw_datasets"
+        src: ./scripts
+        dest: "{{ project_dir }}/scripts"
         mode: '0755'
     
-    - name: Копировать upload_raw_to_s3.sh файл
+    - name: Копировать sql директорию
       copy:
-        src: ./upload_raw_to_s3.sh
-        dest: "{{ project_dir }}/upload_raw_to_s3.sh"
+        src: ./sql
+        dest: "{{ project_dir }}/sql"
+        mode: '0755'
+    
+    - name: Копировать superset директорию
+      copy:
+        src: ./superset
+        dest: "{{ project_dir }}/superset"
+        mode: '0755'
+    
+    - name: Копировать raw директорию
+      copy:
+        src: ./raw
+        dest: "{{ project_dir }}/raw"
         mode: '0755'
     
     - name: Ротация секретов
@@ -87,17 +99,31 @@
       args:
         chdir: "{{ project_dir }}"
 
-    - name: Подождать, пока сервисы подняты
-      wait_for:
-        path: /var/run/docker.sock
-        timeout: 30
+    - name: Подождать 5 секунд для инициализации сервисов
+      pause:
+        seconds: 5
 
-    - name: Запустить скрипт upload_raw_to_s3.sh
-      command: bash {{ project_dir }}/upload_raw_to_s3.sh
+    - name: Загрузить raw данные в S3
+      command: make upload-raw-to-s3
       args:
         chdir: "{{ project_dir }}"
 
-    - name: Удалить локальные raw_datasets
+    - name: Генерировать Trino схемы из CSV
+      command: make generate-schemas
+      args:
+        chdir: "{{ project_dir }}"
+    
+    - name: Создать Trino схемы в базе данных
+      command: make create-trino-schemas
+      args:
+        chdir: "{{ project_dir }}"
+
+    - name: Настроить Superset (датасеты и дашборды)
+      command: make setup-superset
+      args:
+        chdir: "{{ project_dir }}"
+    
+    - name: Удалить локальные raw данные для экономии места
       file:
-        path: "{{ project_dir }}/raw_datasets"
+        path: "{{ project_dir }}/raw"
         state: absent
